@@ -1,58 +1,57 @@
-/* ══════════════════════════════════════════════════
-   THE CHRISTIAN CREATIVE VAULT  ·  script.js
-   Google Sheets POST · Form Validation · UX Logic
-   ══════════════════════════════════════════════════ */
+/* ══════════════════════════════════════════════════════
+   THE CHRISTIAN CREATIVE VAULT  ·  script.js  v3
+   Formspree AJAX · Validation · WhatsApp Redirect
+   ══════════════════════════════════════════════════════ */
 
 'use strict';
 
-/* ── CONFIG ─────────────────────────────────────── */
-const SHEET_ENDPOINT =
-  'https://script.google.com/macros/s/AKfycbxWptB1l3flFMm2YgKg2L58ERi7vRoEDZjTp4sHBfjXXt0vY0oLFN7zszLz6Yi9HUrq/exec';
+/* ── CONSTANTS ──────────────────────────────────────── */
+const FORMSPREE_URL  = 'https://formspree.io/f/xaqagadv';
+const WHATSAPP_LINK  = 'https://chat.whatsapp.com/BVbp26JO0LbE3wrFC6o6M4';
+const REDIRECT_DELAY = 3; // seconds
 
-const WHATSAPP_LINK = 'https://chat.whatsapp.com/BVbp26JO0LbE3wrFC6o6M4';
-
-/* ── VALIDATION RULES ────────────────────────────── */
+/* ── VALIDATION RULES ───────────────────────────────── */
 const RULES = {
-  fullName:   { required: true, minLen: 2,   label: 'Full name' },
-  sex:        { required: true,               label: 'Sex' },
-  profession: { required: true, minLen: 2,   label: 'Profession' },
-  country:    { required: true, minLen: 2,   label: 'Country' },
-  email:      { required: true, email: true, label: 'Email address' },
+  fullName:   { required: true, min: 2,    label: 'Full name' },
+  sex:        { required: true,             label: 'Sex' },
+  profession: { required: true, min: 2,    label: 'Profession' },
+  country:    { required: true, min: 2,    label: 'Country' },
+  email:      { required: true, email: true, label: 'Email' },
   mobile:     { required: true, phone: true, label: 'Mobile number' },
   whatsapp:   { required: true, phone: true, label: 'WhatsApp number' },
 };
 
-function validateField(id, value) {
+function check(id, val) {
   const r = RULES[id];
   if (!r) return null;
-  if (r.required && !value.trim())                      return `${r.label} is required.`;
-  if (r.minLen   && value.trim().length < r.minLen)     return `${r.label} must be at least ${r.minLen} characters.`;
-  if (r.email    && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) return 'Enter a valid email address.';
-  if (r.phone    && !/^\+?[\d\s\-(). ]{6,20}$/.test(value))    return 'Enter a valid phone number.';
+  if (r.required && !val.trim())           return `${r.label} is required.`;
+  if (r.min      && val.trim().length < r.min) return `${r.label} is too short.`;
+  if (r.email    && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(val)) return 'Enter a valid email.';
+  if (r.phone    && !/^\+?[\d\s\-(). ]{6,22}$/.test(val))    return 'Enter a valid phone number.';
   return null;
 }
 
-function applyError(id, msg) {
-  const input = document.getElementById(id);
-  const err   = document.getElementById('err-' + id);
-  if (!input || !err) return;
-  err.textContent = msg || '';
-  if (msg) input.classList.add('has-error');
-  else     input.classList.remove('has-error');
+function markField(id, msg) {
+  const el  = document.getElementById(id);
+  const err = document.getElementById('err-' + id);
+  if (el) {
+    el.classList.toggle('err', !!msg);
+  }
+  if (err) err.textContent = msg || '';
 }
 
 function validateAll(data) {
-  let ok = true;
+  let valid = true;
   for (const id of Object.keys(RULES)) {
-    const msg = validateField(id, data[id] ?? '');
-    applyError(id, msg || '');
-    if (msg) ok = false;
+    const msg = check(id, data[id] ?? '');
+    markField(id, msg);
+    if (msg) valid = false;
   }
-  return ok;
+  return valid;
 }
 
-/* ── COLLECT DATA ────────────────────────────────── */
-function collectFormData() {
+/* ── COLLECT DATA ───────────────────────────────────── */
+function getData() {
   return {
     fullName:   document.getElementById('fullName').value.trim(),
     sex:        document.getElementById('sex').value,
@@ -61,191 +60,215 @@ function collectFormData() {
     email:      document.getElementById('email').value.trim(),
     mobile:     document.getElementById('mobile').value.trim(),
     whatsapp:   document.getElementById('whatsapp').value.trim(),
-    timestamp:  new Date().toLocaleString('en-GB', { timeZone: 'Africa/Accra' }),
   };
 }
 
-/* ── SUBMIT TO GOOGLE SHEETS ─────────────────────── */
+/* ── FORMSPREE AJAX SUBMIT ──────────────────────────── */
 /*
-  Google Apps Script expects either:
-    - A form-urlencoded POST (no CORS issues via no-cors)
-    - Or a JSON POST with doPost handler
-
-  We use the URLSearchParams / fetch with mode: 'no-cors' trick
-  which is the standard approach for Apps Script webhooks on
-  GitHub Pages (no backend). The request goes through but the
-  response is opaque (which is expected — we treat success
-  optimistically since Apps Script processes it correctly).
+  Formspree supports AJAX with:
+    fetch(url, { method:'POST', headers:{'Accept':'application/json'}, body: FormData })
+  This prevents the default page redirect and lets us handle
+  the success/error state ourselves — perfect for GitHub Pages.
 */
-async function submitToSheet(data) {
-  const params = new URLSearchParams(data);
-
-  await fetch(SHEET_ENDPOINT, {
+async function submitFormspree(formEl) {
+  const formData = new FormData(formEl);
+  const resp = await fetch(FORMSPREE_URL, {
     method:  'POST',
-    mode:    'no-cors',       // required for Apps Script cross-origin
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body:    params.toString(),
+    headers: { 'Accept': 'application/json' },
+    body:    formData,
   });
-  // With no-cors, response is always opaque — we treat completion as success
+  if (!resp.ok) {
+    const data = await resp.json().catch(() => ({}));
+    throw new Error(data?.errors?.[0]?.message || 'Submission failed. Please try again.');
+  }
+  return true;
 }
 
-/* ── SHOW SUCCESS ────────────────────────────────── */
-function showSuccess() {
-  const formShell    = document.getElementById('form-shell');
-  const successShell = document.getElementById('success-shell');
-
-  if (formShell)    formShell.style.display = 'none';
-  if (successShell) successShell.hidden = false;
-
-  successShell?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-
-  // Auto-redirect to WhatsApp after 4 seconds
-  setTimeout(() => {
-    window.open(WHATSAPP_LINK, '_blank', 'noopener,noreferrer');
-  }, 4000);
-}
-
-/* ── BUTTON STATE HELPERS ────────────────────────── */
-function setLoading(isLoading) {
+/* ── BUTTON HELPERS ─────────────────────────────────── */
+function setLoading(on) {
   const btn    = document.getElementById('submit-btn');
-  const text   = btn.querySelector('.submit-btn__text');
+  const label  = btn.querySelector('.submit-btn__text');
   const loader = btn.querySelector('.submit-btn__loader');
-  btn.disabled      = isLoading;
-  text.hidden       = isLoading;
-  loader.hidden     = !isLoading;
+  btn.disabled  = on;
+  label.hidden  = on;
+  loader.hidden = !on;
 }
 
-/* ── FORM SUBMIT HANDLER ─────────────────────────── */
+/* ── COUNTDOWN + REDIRECT ───────────────────────────── */
+function startCountdown() {
+  let count = REDIRECT_DELAY;
+  const display = document.getElementById('countdown');
+
+  const tick = setInterval(() => {
+    count--;
+    if (display) display.textContent = count;
+    if (count <= 0) {
+      clearInterval(tick);
+      window.open(WHATSAPP_LINK, '_blank', 'noopener,noreferrer');
+    }
+  }, 1000);
+}
+
+/* ── SHOW SUCCESS ───────────────────────────────────── */
+function showSuccess() {
+  const formCard    = document.getElementById('form-card');
+  const successCard = document.getElementById('success-card');
+
+  if (formCard)    formCard.style.display = 'none';
+  if (successCard) {
+    successCard.hidden = false;
+    successCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+
+  startCountdown();
+}
+
+/* ── MAIN SUBMIT HANDLER ────────────────────────────── */
 async function handleSubmit(e) {
   e.preventDefault();
 
-  const data = collectFormData();
+  const data = getData();
+
   if (!validateAll(data)) {
-    // shake the first errored input
-    const firstErr = document.querySelector('.has-error');
-    if (firstErr) {
-      firstErr.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      firstErr.classList.add('shake');
-      setTimeout(() => firstErr.classList.remove('shake'), 600);
-    }
+    // Scroll to first error
+    const firstErr = document.querySelector('.err');
+    if (firstErr) firstErr.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    shakeBtn();
     return;
   }
 
   setLoading(true);
 
   try {
-    await submitToSheet(data);
+    await submitFormspree(e.target);
     showSuccess();
   } catch (err) {
-    /* Network errors: data may still have gone through (no-cors).
-       We show success anyway since the fetch completed the OPTIONS
-       preflight — true failure is extremely rare here. */
-    console.warn('Fetch note (may be expected with no-cors):', err.message);
-    showSuccess();
+    console.error('Formspree error:', err);
+    showInlineError(err.message || 'Something went wrong. Please try again.');
   } finally {
     setLoading(false);
   }
 }
 
-/* ── LIVE VALIDATION ─────────────────────────────── */
-function attachLiveValidation() {
+function shakeBtn() {
+  const btn = document.getElementById('submit-btn');
+  btn.classList.add('shake-anim');
+  setTimeout(() => btn.classList.remove('shake-anim'), 600);
+}
+
+function showInlineError(msg) {
+  let el = document.getElementById('submit-error');
+  if (!el) {
+    el = document.createElement('p');
+    el.id = 'submit-error';
+    el.style.cssText = 'color:#E05252;font-size:.8rem;font-weight:600;text-align:center;margin-top:10px;';
+    document.getElementById('submit-btn').insertAdjacentElement('afterend', el);
+  }
+  el.textContent = msg;
+}
+
+/* ── LIVE VALIDATION ────────────────────────────────── */
+function liveValidation() {
   Object.keys(RULES).forEach(id => {
     const el = document.getElementById(id);
     if (!el) return;
 
     el.addEventListener('blur', () => {
-      applyError(id, validateField(id, el.value) || '');
+      markField(id, check(id, el.value) || '');
     });
 
     el.addEventListener('input', () => {
-      if (el.classList.contains('has-error')) {
-        const msg = validateField(id, el.value);
-        if (!msg) applyError(id, '');
+      if (el.classList.contains('err')) {
+        if (!check(id, el.value)) markField(id, '');
       }
     });
   });
 }
 
-/* ── SCROLL REVEAL ───────────────────────────────── */
-function initReveal() {
-  const style = document.createElement('style');
-  style.textContent = `
-    .reveal-el {
-      opacity: 0;
-      transform: translateY(28px);
-      transition: opacity 0.65s cubic-bezier(0.25,1,.5,1),
-                  transform 0.65s cubic-bezier(0.25,1,.5,1);
-    }
-    .reveal-el.visible {
-      opacity: 1;
-      transform: none;
-    }
-    .reveal-el.delay-1 { transition-delay: 0.1s; }
-    .reveal-el.delay-2 { transition-delay: 0.2s; }
-    .reveal-el.delay-3 { transition-delay: 0.32s; }
-    @keyframes shake {
-      0%,100% { transform: translateX(0); }
-      20%     { transform: translateX(-7px); }
-      40%     { transform: translateX(7px); }
-      60%     { transform: translateX(-4px); }
-      80%     { transform: translateX(4px); }
-    }
-    .shake { animation: shake 0.5s ease; }
-  `;
-  document.head.appendChild(style);
-
-  // Mark elements for reveal
-  const targets = [
-    '.hero__top',
-    '.hero__copy',
-    '.hero__visual',
-    '.modules__label',
-    '.module-chip',
-    '.tutor__left',
-    '.tutor__right',
-    '.register__header',
-    '.form-shell',
-  ];
-
-  targets.forEach((sel, si) => {
-    document.querySelectorAll(sel).forEach((el, i) => {
-      el.classList.add('reveal-el');
-      if (i > 0 || sel === '.module-chip') {
-        el.classList.add(`delay-${(i % 3) + 1}`);
-      }
-    });
-  });
-
-  const observer = new IntersectionObserver(entries => {
+/* ── SCROLL REVEAL ──────────────────────────────────── */
+function scrollReveal() {
+  const els = document.querySelectorAll('.sr');
+  if (!els.length) return;
+  const io = new IntersectionObserver(entries => {
     entries.forEach(e => {
       if (e.isIntersecting) {
-        e.target.classList.add('visible');
-        observer.unobserve(e.target);
+        e.target.classList.add('in');
+        io.unobserve(e.target);
       }
     });
-  }, { threshold: 0.1, rootMargin: '0px 0px -30px 0px' });
-
-  document.querySelectorAll('.reveal-el').forEach(el => observer.observe(el));
+  }, { threshold: 0.1, rootMargin: '0px 0px -28px 0px' });
+  els.forEach(el => io.observe(el));
 }
 
-/* ── SMOOTH ANCHOR SCROLLING ─────────────────────── */
-function initSmoothNav() {
-  document.querySelectorAll('a[href^="#"]').forEach(link => {
-    link.addEventListener('click', e => {
-      const target = document.querySelector(link.getAttribute('href'));
-      if (target) {
-        e.preventDefault();
-        target.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      }
+/* ── MARK ELEMENTS FOR REVEAL ───────────────────────── */
+function initRevealTargets() {
+  const targets = [
+    { sel: '.hero__text',           delay: '' },
+    { sel: '.hero__flyer-col',      delay: 'd1' },
+    { sel: '.curriculum__header',   delay: '' },
+    { sel: '.curr-item',            delay: '' }, // staggered by index
+    { sel: '.tutor-band__left',     delay: '' },
+    { sel: '.tutor-band__right',    delay: 'd1' },
+    { sel: '.register__left',       delay: '' },
+    { sel: '.form-card',            delay: 'd1' },
+  ];
+
+  targets.forEach(({ sel, delay }) => {
+    document.querySelectorAll(sel).forEach((el, i) => {
+      el.classList.add('sr');
+      const d = sel === '.curr-item' ? `d${(i % 3) + 1}` : delay;
+      if (d) el.classList.add(d);
     });
   });
 }
 
-/* ── BOOT ────────────────────────────────────────── */
+/* ── NAV SCROLL EFFECT ──────────────────────────────── */
+function navScroll() {
+  const nav = document.querySelector('.nav');
+  if (!nav) return;
+  let lastY = 0;
+  window.addEventListener('scroll', () => {
+    const y = window.scrollY;
+    nav.style.transform = (y > lastY && y > 80) ? 'translateY(-100%)' : 'translateY(0)';
+    lastY = y;
+  }, { passive: true });
+}
+
+/* ── INJECT GLOBAL STYLES ───────────────────────────── */
+function injectExtraStyles() {
+  const s = document.createElement('style');
+  s.textContent = `
+    .nav { transition: transform 0.35s cubic-bezier(0.22,1,.36,1); }
+    @keyframes shake {
+      0%,100%{ transform: translateX(0); }
+      20%    { transform: translateX(-8px); }
+      40%    { transform: translateX(8px); }
+      60%    { transform: translateX(-5px); }
+      80%    { transform: translateX(5px); }
+    }
+    .shake-anim { animation: shake .5s ease; }
+  `;
+  document.head.appendChild(s);
+}
+
+/* ── SMOOTH ANCHORS ─────────────────────────────────── */
+function smoothAnchors() {
+  document.querySelectorAll('a[href^="#"]').forEach(a => {
+    a.addEventListener('click', e => {
+      const t = document.querySelector(a.getAttribute('href'));
+      if (t) { e.preventDefault(); t.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
+    });
+  });
+}
+
+/* ── BOOT ───────────────────────────────────────────── */
 document.addEventListener('DOMContentLoaded', () => {
-  initReveal();
-  initSmoothNav();
-  attachLiveValidation();
+  injectExtraStyles();
+  initRevealTargets();
+  scrollReveal();
+  smoothAnchors();
+  navScroll();
+  liveValidation();
 
   const form = document.getElementById('reg-form');
   if (form) form.addEventListener('submit', handleSubmit);
